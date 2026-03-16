@@ -1,136 +1,120 @@
 import { AILogoPrompt } from "@/configs/AiModel";
 import cloudinary from "@/configs/cloudinaryConfig";
 import { db } from "@/configs/FirebaseConfig";
-import { GoogleGenAI } from '@google/genai';
+
+import { InferenceClient } from "@huggingface/inference";
 import { doc, setDoc } from "firebase/firestore";
 import { NextResponse } from "next/server";
 
+const client = new InferenceClient(process.env.HUGGING_FACE_API_KEY);
+
 export async function POST(req) {
     try {
-        const { prompt, email, title, desc, type, userCredits } = await req.json();
+        const { prompt, email, title, desc } = await req.json();
 
         if (!prompt) {
             return NextResponse.json(
-                { error: 'Missing prompt parameter' },
+                { error: "Missing prompt" },
                 { status: 400 }
             );
         }
 
-        // Get AI-generated refined prompt from your custom service
+        /* -------------------------------
+           1️⃣ REFINE PROMPT USING GEMINI
+        --------------------------------*/
+
         const AiPromptResult = await AILogoPrompt.sendMessage(prompt);
-        const parsedResult = JSON.parse(await AiPromptResult.response.text());
 
-        if (!parsedResult?.prompt) {
+        const rawText = AiPromptResult.response
+            .text()
+            .replace(/```json/g, "")
+            .replace(/```/g, "");
+
+        const parsedResult = JSON.parse(rawText);
+
+        const finalPrompt = parsedResult?.prompt;
+
+        if (!finalPrompt) {
             return NextResponse.json(
-                { error: 'AI did not return a valid prompt' },
+                { error: "Invalid AI prompt generated" },
                 { status: 500 }
             );
         }
 
-        const AiPrompt = parsedResult.prompt;
+        /* -------------------------------
+           2️⃣ GENERATE IMAGE USING HF FLUX
+        --------------------------------*/
 
-        const ai = new GoogleGenAI({
-            apiKey: process.env.GEMINI_API_KEY,
-        });
-        const config = {
-            responseModalities: [
-                'IMAGE',
-                'TEXT',
-            ],
-            responseMimeType: 'text/plain',
-        };
-        const model = 'gemini-2.0-flash-preview-image-generation';
-        const contents = [
-            {
-                role: 'user',
-                parts: [
-                    {
-                        text: AiPrompt.prompt || AiPrompt,
-                    },
-                ],
+        const imageBlob = await client.textToImage({
+            provider: "together",
+            model: "black-forest-labs/FLUX.1-schnell",
+            inputs: finalPrompt,
+            parameters: {
+                num_inference_steps: 5,
             },
-        ];
-
-        const response = await ai.models.generateContentStream({
-            model,
-            config,
-            contents,
         });
 
-        let base64Image = "";
-        let mimeType = "";
+        if (!imageBlob) {
+            return NextResponse.json(
+                { error: "Image generation failed" },
+                { status: 500 }
+            );
+        }
 
+        /* -------------------------------
+           3️⃣ CONVERT BLOB → BASE64
+        --------------------------------*/
 
-        for await (const chunk of response) {
-            if (
-                chunk.candidates &&
-                chunk.candidates[0]?.content?.parts?.[0]?.inlineData
-            ) {
-                const inlineData = chunk.candidates[0].content.parts[0].inlineData;
-                base64Image = inlineData.data; // Base64-encoded image data
-                mimeType = inlineData.mimeType || "image/png";
-            } else if (chunk.text) {
-                console.log("Text chunk:", chunk.text); // Log any text responses
+        const arrayBuffer = await imageBlob.arrayBuffer();
+
+        const base64Image = Buffer.from(arrayBuffer).toString("base64");
+
+        const base64WithMime = `data:image/png;base64,${base64Image}`;
+
+        /* -------------------------------
+           4️⃣ UPLOAD TO CLOUDINARY
+        --------------------------------*/
+
+        const uploadResult = await cloudinary.uploader.upload(base64WithMime, {
+            folder: "logo-images",
+        });
+
+        /* -------------------------------
+           5️⃣ SAVE TO FIRESTORE
+        --------------------------------*/
+
+        await setDoc(
+            doc(db, "users", email, "logos", Date.now().toString()),
+            {
+                image: uploadResult.secure_url,
+                title,
+                desc,
+                prompt: finalPrompt,
+                createdAt: Date.now(),
             }
-        }
+        );
 
-        if (!base64Image) {
-            return NextResponse.json(
-                { error: "No image generated" },
-                { status: 500 }
-            );
-        }
+        /* -------------------------------
+           6️⃣ RETURN RESPONSE
+        --------------------------------*/
 
-        // Convert base64 to buffer
-        const buffer = Buffer.from(base64Image, "base64");
-
-        // Convert buffer back to base64 with MIME type for frontend
-        const base64ImageWithMime = `data:${mimeType};base64,${buffer.toString("base64")}`;
-
-        const result = await cloudinary.uploader.upload(base64ImageWithMime, {
-            folder: 'logo-images',
-            allowed_formats: ['jpeg', 'png', 'jpg'],
+        return NextResponse.json({
+            image: uploadResult.secure_url,
         });
-
-        // Save image to FireStore
-        try {
-            await setDoc(doc(db, 'users', email, 'logos', Date.now().toString()), {
-                image: result.url || result.secure_url,
-                title: title,
-                desc: desc,
-            });
-        } catch (dbError) {
-            console.error('Error storing data in Firestore:', dbError);
-            return NextResponse.json(
-                { error: 'Failed to store data' },
-                { status: 500 }
-            );
-        }
-        
-        // Return the base64 image to the frontend
-        return NextResponse.json({ image: base64ImageWithMime });
-
 
     } catch (error) {
-        console.error('Error in POST /api/user:', error);
+        console.error(
+            "API Error:",
+            JSON.stringify(error, null, 2)
+        );
+
         return NextResponse.json(
-            { error: 'Internal Server Error' },
-            { status: 500 }
+            {
+                error: error.message || "Internal Server Error",
+            },
+            {
+                status: error.status || 500,
+            }
         );
     }
 }
-
-
-async function ConvertImageToBase64(imageBlob) {
-    try {
-        const arrayBuffer = await imageBlob.arrayBuffer();
-
-        const base64ImageRaw = Buffer.from(arrayBuffer).toString('base64');
-
-        return `data:image/png;base64,${base64ImageRaw}`;
-    } catch (error) {
-        console.error('Error converting image to base64:', error);
-        return null;
-    }
-}
-

@@ -1,14 +1,13 @@
-const {
-    GoogleGenerativeAI,
-    HarmCategory,
-    HarmBlockThreshold,
-} = require("@google/generative-ai");
+import {
+    GoogleGenerativeAI
+} from "@google/generative-ai";
 
-const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY;
+const apiKey = process.env.GEMINI_API_KEY;
+
 const genAI = new GoogleGenerativeAI(apiKey);
 
 const model = genAI.getGenerativeModel({
-    model: "gemini-2.0-flash",
+  model: "gemini-2.5-flash",
 });
 
 const generationConfig = {
@@ -39,21 +38,28 @@ export const AIDesignIdea = model.startChat({
 
 
 export const AILogoPrompt = model.startChat({
-    generationConfig,
-    history: [
+  generationConfig,
+  history: [
+    {
+      role: "user",
+      parts: [
         {
-            role: "user",
-            parts: [
-                { text: "Generate a text prompt to create Logo for Logo Title/Brand name: Indian Restaurant, with description: Indian Restro, with \nColor combination of Ocean Blues and include Modern Sharp Lined Logos design idea and Referring to this Logo Prompt: Design a creative and artistic logo with a retro-modern vibe that showcases the brand's identity. Use bold outlines, intricate patterns, and vibrant, contrasting colors to make the design pop. Incorporate thematic elements like food, nature, technology, or lifestyle symbols depending on the brand's niche. The typography should be playful yet clear, complementing the overall composition with a dynamic and balanced layout. Ensure the logo feels unique, versatile, and eye-catching Give me result in JSON portal with prompt field only" },
-            ],
-        },
-        {
-            role: "model",
-            parts: [
-                { text: "```json\n{\n  \"prompt\": \"Create a modern, sharp-lined logo for an Indian restaurant called \\\"Indian Restro\\\". The color palette should heavily feature ocean blues in various shades. The logo should incorporate a retro-modern aesthetic with bold outlines and intricate patterns, drawing inspiration from both traditional Indian motifs and contemporary design. While adhering to the sharp-lined style, infuse a sense of artistry and playfulness, incorporating relevant thematic elements subtly representing Indian cuisine or culture. The typography should be clear and modern, complementing the logo's overall composition and maintaining a dynamic and balanced layout.\"\n}\n```\n" },
-            ],
-        },
-    ],
+          text: `Generate a text prompt to create Logo for Logo Title/Brand name: Indian Restaurant, 
+with description: Indian Restro, 
+with Color combination of Ocean Blues and include Modern Sharp Lined Logos design idea.
+
+Referring to this Logo Prompt:
+Design a creative and artistic logo with a retro-modern vibe that showcases the brand's identity.
+
+Give result in JSON format:
+
+{
+"prompt": "generated prompt here"
+}`
+        }
+      ]
+    }
+  ]
 });
 
 // const result = await chatSession.sendMessage("INSERT_INPUT_HERE");
